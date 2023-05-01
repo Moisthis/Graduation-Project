@@ -3,6 +3,11 @@ import '../lib/three/js/controls/OrbitControls'
 import axios from 'axios'
 import * as d3 from 'd3-geo'
 import TWEEN from '@tweenjs/tween.js'
+import { createFlyCurve,timer } from './flyCurve'
+import { Line2 } from 'three/examples/jsm/lines/Line2'
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry'
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial'
+
 
 export default class GeoMap {
     constructor() {
@@ -30,8 +35,11 @@ export default class GeoMap {
         this.setControl();
         this.setAxes();
         this.makeGround();
-        this.getMap('/geojson/world.json', 'china');
-        this.getMap('/geojson/51.min.json', 'sichuan');
+        //this.getMap('/geojson/huai.json', 'china');
+        this.getMap('/geojson/fp.json', 'sichuan');
+        this.getMap('/geojson/huai_runoff.geojson', 'runoff');
+       
+
         this.animat();
         this.bindMouseEvent();
     }
@@ -76,37 +84,110 @@ export default class GeoMap {
         const pointLightHelper = new THREE.PointLightHelper(pointLight, sphereSize);
         this.scene.add(pointLightHelper);
     }
-
+     /**
+     * @desc 径流坐标变换
+     */
+     c_transform(c){
+        if (!this.projection) {
+            this.projection = d3.geoMercator().center([115.782939,
+                33.869338]).scale(100).translate([0, 0,0]);
+        }
+        const [x, y, z] = this.projection([c[0], c[1],c[2]])
+      
+        return [y, x, z]
+    }
     /**
      * @desc 绘制地图
      * @params geojson
      * */
 
     setMapData(data, type) {
+        if (type=="runoff"){
+            const that = this;
+          
+    let vector3json = [];
+    data.features.forEach(function(features,featuresIndex){
+        const areaItems = features.geometry.coordinates;
+        vector3json[featuresIndex] = [];
+        areaItems.forEach(function(item,areaIndex){
+            const item_ct =that.c_transform(item);
+            const vector3 = new THREE.Vector3(item_ct[0],item_ct[1],item_ct[2]).multiplyScalar(1.2); 
+            vector3json[featuresIndex].push(vector3);
+        })
+    });
+        this.drawRunoffmap(vector3json);    
+        }
+        else{
         const that = this;
         let vector3json = [];
-        data.features.forEach(function (features, featuresIndex) {
+        data.features.forEach(function (features, featuresIndex) { //featuresIndex表示features中的每一个市的Index，features表示features列表中的每一个元素，元素type为字典{}
             const areaItems = features.geometry.coordinates;
-            features.properties.cp = that.lnglatToVector3(features.properties.cp);
+            features.properties.centroid = that.lnglatToVector3(features.properties.centroid);
             vector3json[featuresIndex] = {
-                data: features.properties,
+                data: features.properties,   
                 mercator: []
             };
-            areaItems.forEach(function (item, areaIndex) {
+            areaItems.forEach(function (item, areaIndex) { //areaItems为coordinates后的内容
                 vector3json[featuresIndex].mercator[areaIndex] = [];
                 item.forEach(function (cp) {
-                    const lnglat = that.lnglatToVector3(cp);
-                    const vector3 = new THREE.Vector3(lnglat[0], lnglat[1], lnglat[2]).multiplyScalar(1.2);
-                    vector3json[featuresIndex].mercator[areaIndex].push(vector3)
+                    cp.forEach(function(cp1){ 
+                       
+                        const lnglat = that.lnglatToVector3(cp1);
+                        const vector3 = new THREE.Vector3(lnglat[0], lnglat[1], lnglat[2]).multiplyScalar(1.2);
+                       
+                        vector3json[featuresIndex].mercator[areaIndex].push(vector3)
+                    })
+                   
                 })
             })
+          
         });
         if (type === 'sichuan') {
             this.drawMap(vector3json)
         } else if (type === 'china') {
             this.drawChinaMap(vector3json)
-        }
+        }}
     }
+ 
+    /**
+    * @desc 绘制径流
+    * @param data: Geojson
+    */
+    drawRunoffmap(data){
+    
+    let that = this;
+    const lineMaterial = new LineMaterial({
+        color: 0x800080, // 线条颜色
+        linewidth: 0.01, // 线条宽度
+        dashed: false, // 是否是虚线
+    });
+    data.forEach(function(item){
+        //console.log(items);
+        let items = [];
+        item.forEach(function(v3) {
+            let v3_arr = v3.toArray();
+            items.push(v3_arr[0]);
+            items.push(v3_arr[1]);
+            items.push(v3_arr[2]);
+          });
+        var flyLine = createFlyCurve(item,false);
+        flyLine.position.z = 2;
+        that.scene.add(flyLine);
+        const lineGeometry = new LineGeometry();
+        lineGeometry.setPositions(items);
+        const line = new Line2(lineGeometry,lineMaterial);
+        //var geometry = new THREE.BufferGeometry().setFromPoints( item );
+		//var material = new THREE.LineBasicMaterial( { color : 0x800080,linewidth:3} );
+        //var curveObject = new THREE.Line( geometry, material );
+        line.position.z = 1.5;
+        that.scene.add(line);
+    });
+   
+ 
+
+}
+    
+
 
     /**
      * @desc 绘制图形
@@ -192,7 +273,7 @@ export default class GeoMap {
             wireframe: false,
         });
         data.forEach(function (areaData) {
-            if (areaData.data.id === '51') {
+            if (tr) {
                 areaData.mercator.forEach(function (areaItem) {
                     let geometry = new THREE.BufferGeometry();
                     let verticesArr = [];
@@ -266,13 +347,14 @@ export default class GeoMap {
      * */
     lnglatToVector3(lnglat) {
         if (!this.projection) {
-            this.projection = d3.geoMercator().center([104.072259, 30.663403]).scale(100).translate([0, 0]);
+            this.projection = d3.geoMercator().center([115.782939,
+                33.869338]).scale(100).translate([0, 0]);
         }
         const [x, y] = this.projection([lnglat[0], lnglat[1]])
         const z = 0;
         return [y, x, z]
     }
-
+   
     /**
      * @desc 创建场景
      * */
@@ -478,8 +560,8 @@ export default class GeoMap {
         circleMeshCp.position.z = -0.995;
         lightTipGroup.add(circleMeshCp);
 
-        lightTipGroup.position.x = areaData.data.cp[0];
-        lightTipGroup.position.y = areaData.data.cp[1];
+        lightTipGroup.position.x = areaData.data.centroid[0];
+        lightTipGroup.position.y = areaData.data.centroid[1];
         lightTipGroup.position.z = 1.5;
         lightTipGroup.rotation.z = Math.PI / 4;
         lightTipGroup.renderOrder = 2;
@@ -512,7 +594,7 @@ export default class GeoMap {
         });
 
         let textSprite = new THREE.Sprite(SpriteMaterial);
-        textSprite.position.set(areaData.data.cp[0], areaData.data.cp[1], 1);
+        textSprite.position.set(areaData.data.centroid[0], areaData.data.centroid[1], 1);
         textSprite.scale.set(4, 0.5, 1);
         textSprite.renderOrder = 3;
 
